@@ -6,22 +6,26 @@ import { HttpsProxyAgent } from 'https-proxy-agent';
 import 'dotenv/config';
 
 const app = express();
-app.use(cors());
+
+// --- تعديل الـ CORS لضمان قبول الطلبات من Netlify ---
+app.use(cors({
+  origin: '*', // يسمح لأي موقع بالاتصال (حل مثالي للمرحلة الحالية)
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
 app.use(express.json());
 
 // --- 1. إعداد السايفون (لـ Gemini فقط في الجهاز المحلي) ---
-// التعديل هنا: السايفون يشتغل فقط لو إنت على جهازك (Local) ومسحت الـ Proxy من السيرفر الأونلاين
 const isLocal = process.env.NODE_ENV !== 'production';
 const proxy = 'http://127.0.0.1:1080'; 
 const geminiAgent = isLocal ? new HttpsProxyAgent(proxy) : null;
 
 // --- 2. إعداد Gemini ---
-// الأفضل نستخدم الـ API Key من الـ Environment Variables اللي حطيناها في Railway
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 // --- 3. الاتصال بـ MongoDB ---
 const MONGO_URI = process.env.MONGO_URI;
-
 mongoose.set('strictQuery', true);
 
 mongoose.connect(MONGO_URI)
@@ -51,15 +55,20 @@ app.post('/api/auth/login', async (req, res) => {
   try {
     const { email, password } = req.body;
     let user = await User.findOne({ email });
+    
+    // لو المستخدم مش موجود.. انشئه فوراً (Registration & Login in one)
     if (!user) {
       user = new User({ email, password });
       await user.save();
-      return res.json({ success: true, message: "تم إنشاء حساب جديد", user });
+      return res.json({ success: true, message: "تم إنشاء حساب جديد بنجاح", user });
     }
+
+    // لو موجود.. اتأكد من الباسورد
     if (user.password !== password) {
-      return res.status(401).json({ success: false, message: "كلمة المرور خطأ" });
+      return res.status(401).json({ success: false, message: "كلمة المرور التي أدخلتها غير صحيحة" });
     }
-    res.json({ success: true, message: "تم تسجيل الدخول", user });
+
+    res.json({ success: true, message: "تم تسجيل الدخول بنجاح", user });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
@@ -68,9 +77,8 @@ app.post('/api/auth/login', async (req, res) => {
 app.post('/api/chat', async (req, res) => {
   try {
     const { message } = req.body;
-    if (!message) return res.status(400).json({ error: "No message" });
+    if (!message) return res.status(400).json({ error: "لا توجد رسالة" });
 
-    // التعديل هنا: استخدام الـ Agent فقط في البيئة المحلية
     let model;
     if (geminiAgent) {
       model = genAI.getGenerativeModel(
